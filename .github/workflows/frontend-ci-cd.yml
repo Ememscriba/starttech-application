@@ -1,0 +1,76 @@
+name: Frontend CI/CD
+
+# This pipeline runs when code is pushed to the Main branch
+# specifically when files inside the frontend folder change
+on:
+  push:
+    branches:
+      - Main
+    paths:
+      - 'frontend/**'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1 - Download the code from GitHub onto the runner machine
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2 - Install Node.js so we can build the React app
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      # Step 3 - Install all the npm packages the React app needs
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Step 4 - Check for security vulnerabilities in packages
+      - name: Security scan
+        working-directory: frontend
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      # Step 5 - Run the tests
+      - name: Run tests
+        working-directory: frontend
+        run: npm test -- --watchAll=false --passWithNoTests
+
+      # Step 6 - Build the production React bundle
+      # This creates a build/ folder with all the compiled files
+      - name: Build React app
+        working-directory: frontend
+        run: npm run build
+        env:
+          CI: false
+
+      # Step 7 - Connect to AWS using the secrets we added to GitHub
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # Step 8 - Upload the build folder to S3
+      # --delete means remove files from S3 that no longer exist locally
+      - name: Deploy to S3
+        working-directory: frontend
+        run: |
+          aws s3 sync build/ s3://${{ secrets.S3_BUCKET_NAME }} \
+            --delete \
+            --cache-control max-age=31536000
+
+      # Step 9 - Tell us the deployment is done
+      - name: Deployment complete
+        run: |
+          echo "Frontend deployed successfully!"
+          echo "Bucket: ${{ secrets.S3_BUCKET_NAME }}"
